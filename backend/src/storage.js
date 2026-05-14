@@ -2,7 +2,7 @@
  * storage.js — Livello di astrazione dati
  *
  * Priorità:
- *  1. KV_REST_API_URL → Vercel KV (Redis, produzione su Vercel)
+ *  1. KV_REST_API_URL → Upstash Redis (produzione su Vercel)
  *  2. DB_SERVER + credenziali → SQL Server (mssql)
  *  3. Fallback → File JSON locale (backend/data/questions.json)
  */
@@ -26,30 +26,30 @@ const isDbConfigured = () =>
 
 const kvStore = {
   async createQuestion(text) {
-    const { kv } = require('@vercel/kv');
-    const id = await kv.incr('q:counter');
+    const redis = _getRedis();
+    const id = await redis.incr('q:counter');
     const now = new Date().toISOString();
     const score = Date.now();
 
     await Promise.all([
-      kv.hset(`q:${id}`, {
+      redis.hset(`q:${id}`, {
         id, text,
         is_read: 0,
         is_highlighted: 0,
         is_public: 0,
         created_at: now,
       }),
-      kv.zadd('q:ids', { score, member: String(id) }),
+      redis.zadd('q:ids', { score, member: String(id) }),
     ]);
 
     return { id, text, is_read: false, is_highlighted: false, is_public: false, created_at: now };
   },
 
   async _fetchAll() {
-    const { kv } = require('@vercel/kv');
-    const ids = await kv.zrange('q:ids', 0, -1, { rev: true });
+    const redis = _getRedis();
+    const ids = await redis.zrange('q:ids', 0, -1, { rev: true });
     if (!ids || ids.length === 0) return [];
-    const questions = await Promise.all(ids.map((id) => kv.hgetall(`q:${id}`)));
+    const questions = await Promise.all(ids.map((id) => redis.hgetall(`q:${id}`)));
     return questions
       .filter(Boolean)
       .map((q) => ({
@@ -73,8 +73,8 @@ const kvStore = {
   },
 
   async update(id, patch) {
-    const { kv } = require('@vercel/kv');
-    const exists = await kv.exists(`q:${id}`);
+    const redis = _getRedis();
+    const exists = await redis.exists(`q:${id}`);
     if (!exists) return false;
 
     const fields = {};
@@ -83,15 +83,15 @@ const kvStore = {
     if (patch.is_public !== undefined)      fields.is_public      = patch.is_public ? 1 : 0;
 
     if (Object.keys(fields).length === 0) return false;
-    await kv.hset(`q:${id}`, fields);
+    await redis.hset(`q:${id}`, fields);
     return true;
   },
 
   async remove(id) {
-    const { kv } = require('@vercel/kv');
+    const redis = _getRedis();
     const [deleted] = await Promise.all([
-      kv.del(`q:${id}`),
-      kv.zrem('q:ids', String(id)),
+      redis.del(`q:${id}`),
+      redis.zrem('q:ids', String(id)),
     ]);
     return deleted > 0;
   },

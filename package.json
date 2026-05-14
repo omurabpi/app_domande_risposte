@@ -4,7 +4,7 @@
   "private": true,
   "description": "Dipendenze root per Vercel Serverless Function",
   "dependencies": {
-    "@vercel/kv": "^3.0.0",
+    "@upstash/redis": "^1.38.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
