@@ -15,7 +15,17 @@ const isVercelKvConfigured = () => !!process.env.KV_REST_API_URL;
 const isDbConfigured = () =>
   !!(process.env.DB_SERVER && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME);
 
-// ─── Vercel KV Store (Redis) — operazioni atomiche ───────────────────────────
+// ─── Upstash Redis (via @upstash/redis) ──────────────────────────────────────
+
+function _getRedis() {
+  const { Redis } = require('@upstash/redis');
+  return new Redis({
+    url: process.env.KV_REST_API_URL,
+    token: process.env.KV_REST_API_TOKEN,
+  });
+}
+
+// ─── KV Store (Redis) — operazioni atomiche ───────────────────────────────────
 //
 // Struttura Redis:
 //   q:counter          → INCR atomico per generare ID univoci
