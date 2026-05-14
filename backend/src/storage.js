@@ -1,15 +1,88 @@
 /**
  * storage.js — Livello di astrazione dati
  *
- * Se DB_SERVER è configurato nel .env → usa SQL Server
- * Altrimenti → file JSON locale (data/questions.json) — persiste su disco
+ * Priorità:
+ *  1. DATABASE_URL → PostgreSQL (Supabase, Neon, ecc.)
+ *  2. DB_SERVER + credenziali → SQL Server (mssql)
+ *  3. Fallback → File JSON locale (backend/data/questions.json)
  */
 
 const fs = require('fs');
 const path = require('path');
 
+const isPostgresConfigured = () => !!process.env.DATABASE_URL;
+
 const isDbConfigured = () =>
   !!(process.env.DB_SERVER && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME);
+
+// ─── PostgreSQL / Supabase Store ──────────────────────────────────────────────
+
+let _pgPool = null;
+
+function getPgPool() {
+  if (!_pgPool) {
+    const { Pool } = require('pg');
+    _pgPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    });
+  }
+  return _pgPool;
+}
+
+const pgStore = {
+  async createQuestion(text) {
+    const result = await getPgPool().query(
+      'INSERT INTO questions (text) VALUES ($1) RETURNING *',
+      [text]
+    );
+    return result.rows[0];
+  },
+
+  async getAll() {
+    const result = await getPgPool().query(
+      'SELECT * FROM questions ORDER BY created_at DESC'
+    );
+    return result.rows;
+  },
+
+  async getPublic() {
+    const result = await getPgPool().query(
+      'SELECT * FROM questions WHERE is_public = true ORDER BY is_highlighted DESC, created_at DESC'
+    );
+    return result.rows;
+  },
+
+  async update(id, patch) {
+    const fields = [];
+    const values = [];
+    let i = 1;
+    if (patch.is_read !== undefined)        { fields.push(`is_read = $${i++}`);        values.push(patch.is_read); }
+    if (patch.is_highlighted !== undefined) { fields.push(`is_highlighted = $${i++}`); values.push(patch.is_highlighted); }
+    if (patch.is_public !== undefined)      { fields.push(`is_public = $${i++}`);      values.push(patch.is_public); }
+    if (fields.length === 0) return false;
+    values.push(id);
+    const result = await getPgPool().query(
+      `UPDATE questions SET ${fields.join(', ')} WHERE id = $${i} RETURNING id`,
+      values
+    );
+    return result.rowCount > 0;
+  },
+
+  async remove(id) {
+    const result = await getPgPool().query('DELETE FROM questions WHERE id = $1', [id]);
+    return result.rowCount > 0;
+  },
+
+  async findUser(username) {
+    const adminUser = process.env.ADMIN_USER || 'admin';
+    const adminPass = process.env.ADMIN_PASSWORD || 'admin';
+    if (username === adminUser) {
+      return { id: 1, username: adminUser, _plainPassword: adminPass };
+    }
+    return null;
+  },
+};
 
 // ─── File JSON Store ──────────────────────────────────────────────────────────
 
@@ -166,7 +239,9 @@ const db = {
 // ─── Export del modulo attivo ─────────────────────────────────────────────────
 
 function getStorage() {
-  return isDbConfigured() ? db : mem;
+  if (isPostgresConfigured()) return pgStore;
+  if (isDbConfigured()) return db;
+  return mem; // JSON locale
 }
 
-module.exports = { getStorage, isDbConfigured };
+module.exports = { getStorage, isDbConfigured, isPostgresConfigured };

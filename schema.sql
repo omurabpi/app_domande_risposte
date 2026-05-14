@@ -1,4 +1,21 @@
 -- ============================================
+-- Schema PostgreSQL (Supabase) — App Domande Ometec
+-- ============================================
+-- Eseguire questo script nell'editor SQL di Supabase
+
+CREATE TABLE IF NOT EXISTS questions (
+    id             BIGSERIAL PRIMARY KEY,
+    text           TEXT NOT NULL,
+    is_read        BOOLEAN NOT NULL DEFAULT FALSE,
+    is_highlighted BOOLEAN NOT NULL DEFAULT FALSE,
+    is_public      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_questions_is_public  ON questions (is_public);
+CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions (created_at DESC);
+
+-- ============================================
 -- Schema SQL Server — App Domande Ometec
 -- ============================================
 -- Eseguire questo script sul database indicato in .env
