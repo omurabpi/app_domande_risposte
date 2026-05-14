@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ometec: #C81B17;
+  --color-ometec-dark: #a01512;
+  --color-ometec-light: rgba(200,27,23,0.15);
+}
+
+html {
+  background: #09090b;
+  color-scheme: dark;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+::selection { background: rgba(200,27,23,0.25); }
