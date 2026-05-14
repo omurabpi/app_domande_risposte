@@ -15,61 +15,85 @@ const isVercelKvConfigured = () => !!process.env.KV_REST_API_URL;
 const isDbConfigured = () =>
   !!(process.env.DB_SERVER && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME);
 
-// ─── Vercel KV Store (Redis) ──────────────────────────────────────────────────
-
-async function _kvLoad() {
-  const { kv } = require('@vercel/kv');
-  const data = await kv.get('appdata');
-  return data || { nextId: 1, questions: [] };
-}
-
-async function _kvSave(data) {
-  const { kv } = require('@vercel/kv');
-  await kv.set('appdata', data);
-}
+// ─── Vercel KV Store (Redis) — operazioni atomiche ───────────────────────────
+//
+// Struttura Redis:
+//   q:counter          → INCR atomico per generare ID univoci
+//   q:ids              → Sorted Set: score = timestamp Unix, member = id
+//   q:{id}             → Hash con i campi della domanda
+//
+// Così due invii simultanei non si sovrascrivono mai.
 
 const kvStore = {
   async createQuestion(text) {
-    const data = await _kvLoad();
-    const q = {
-      id: data.nextId++,
-      text,
-      is_read: false,
-      is_highlighted: false,
-      is_public: false,
-      created_at: new Date().toISOString(),
-    };
-    data.questions.unshift(q);
-    await _kvSave(data);
-    return q;
+    const { kv } = require('@vercel/kv');
+    const id = await kv.incr('q:counter');
+    const now = new Date().toISOString();
+    const score = Date.now();
+
+    await Promise.all([
+      kv.hset(`q:${id}`, {
+        id, text,
+        is_read: 0,
+        is_highlighted: 0,
+        is_public: 0,
+        created_at: now,
+      }),
+      kv.zadd('q:ids', { score, member: String(id) }),
+    ]);
+
+    return { id, text, is_read: false, is_highlighted: false, is_public: false, created_at: now };
+  },
+
+  async _fetchAll() {
+    const { kv } = require('@vercel/kv');
+    const ids = await kv.zrange('q:ids', 0, -1, { rev: true });
+    if (!ids || ids.length === 0) return [];
+    const questions = await Promise.all(ids.map((id) => kv.hgetall(`q:${id}`)));
+    return questions
+      .filter(Boolean)
+      .map((q) => ({
+        ...q,
+        id: Number(q.id),
+        is_read: !!Number(q.is_read),
+        is_highlighted: !!Number(q.is_highlighted),
+        is_public: !!Number(q.is_public),
+      }));
   },
 
   async getAll() {
-    return (await _kvLoad()).questions;
+    return this._fetchAll();
   },
 
   async getPublic() {
-    return (await _kvLoad()).questions
+    const all = await this._fetchAll();
+    return all
       .filter((q) => q.is_public)
       .sort((a, b) => b.is_highlighted - a.is_highlighted);
   },
 
   async update(id, patch) {
-    const data = await _kvLoad();
-    const idx = data.questions.findIndex((q) => q.id === Number(id));
-    if (idx === -1) return false;
-    data.questions[idx] = { ...data.questions[idx], ...patch };
-    await _kvSave(data);
+    const { kv } = require('@vercel/kv');
+    const exists = await kv.exists(`q:${id}`);
+    if (!exists) return false;
+
+    const fields = {};
+    if (patch.is_read !== undefined)        fields.is_read        = patch.is_read ? 1 : 0;
+    if (patch.is_highlighted !== undefined) fields.is_highlighted = patch.is_highlighted ? 1 : 0;
+    if (patch.is_public !== undefined)      fields.is_public      = patch.is_public ? 1 : 0;
+
+    if (Object.keys(fields).length === 0) return false;
+    await kv.hset(`q:${id}`, fields);
     return true;
   },
 
   async remove(id) {
-    const data = await _kvLoad();
-    const before = data.questions.length;
-    data.questions = data.questions.filter((q) => q.id !== Number(id));
-    if (data.questions.length === before) return false;
-    await _kvSave(data);
-    return true;
+    const { kv } = require('@vercel/kv');
+    const [deleted] = await Promise.all([
+      kv.del(`q:${id}`),
+      kv.zrem('q:ids', String(id)),
+    ]);
+    return deleted > 0;
   },
 
   async findUser(username) {
