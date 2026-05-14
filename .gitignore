@@ -10,6 +10,9 @@ frontend/dist/
 .env
 backend/.env
 
+# Data persistente locale (non in git)
+backend/data/
+
 # Logs
 *.log
 npm-debug.log*

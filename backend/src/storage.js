@@ -2,52 +2,76 @@
  * storage.js — Livello di astrazione dati
  *
  * Se DB_SERVER è configurato nel .env → usa SQL Server
- * Altrimenti → fallback in-memory (dati persi al riavvio del server)
+ * Altrimenti → file JSON locale (data/questions.json) — persiste su disco
  */
+
+const fs = require('fs');
+const path = require('path');
 
 const isDbConfigured = () =>
   !!(process.env.DB_SERVER && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME);
 
-// ─── In-Memory Store ─────────────────────────────────────────────────────────
+// ─── File JSON Store ──────────────────────────────────────────────────────────
 
-let _nextId = 1;
-let _questions = [];
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_FILE = path.join(DATA_DIR, 'questions.json');
+
+function _loadData() {
+  if (!fs.existsSync(DATA_FILE)) return { nextId: 1, questions: [] };
+  try {
+    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  } catch {
+    return { nextId: 1, questions: [] };
+  }
+}
+
+function _saveData(data) {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
 
 const mem = {
   async createQuestion(text) {
+    const data = _loadData();
     const q = {
-      id: _nextId++,
+      id: data.nextId++,
       text,
       is_read: false,
       is_highlighted: false,
       is_public: false,
       created_at: new Date().toISOString(),
     };
-    _questions.unshift(q);
+    data.questions.unshift(q);
+    _saveData(data);
     return q;
   },
 
   async getAll() {
-    return [..._questions];
+    return _loadData().questions;
   },
 
   async getPublic() {
-    return _questions
+    return _loadData().questions
       .filter((q) => q.is_public)
       .sort((a, b) => b.is_highlighted - a.is_highlighted);
   },
 
   async update(id, patch) {
-    const idx = _questions.findIndex((q) => q.id === Number(id));
+    const data = _loadData();
+    const idx = data.questions.findIndex((q) => q.id === Number(id));
     if (idx === -1) return false;
-    _questions[idx] = { ..._questions[idx], ...patch };
+    data.questions[idx] = { ...data.questions[idx], ...patch };
+    _saveData(data);
     return true;
   },
 
   async remove(id) {
-    const before = _questions.length;
-    _questions = _questions.filter((q) => q.id !== Number(id));
-    return _questions.length < before;
+    const data = _loadData();
+    const before = data.questions.length;
+    data.questions = data.questions.filter((q) => q.id !== Number(id));
+    if (data.questions.length === before) return false;
+    _saveData(data);
+    return true;
   },
 
   async findUser(username) {
