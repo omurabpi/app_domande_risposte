@@ -2,7 +2,7 @@
  * storage.js — Livello di astrazione dati
  *
  * Priorità:
- *  1. DATABASE_URL → PostgreSQL (Supabase, Neon, ecc.)
+ *  1. KV_REST_API_URL → Vercel KV (Redis, produzione su Vercel)
  *  2. DB_SERVER + credenziali → SQL Server (mssql)
  *  3. Fallback → File JSON locale (backend/data/questions.json)
  */
@@ -10,68 +10,66 @@
 const fs = require('fs');
 const path = require('path');
 
-const isPostgresConfigured = () => !!process.env.DATABASE_URL;
+const isVercelKvConfigured = () => !!process.env.KV_REST_API_URL;
 
 const isDbConfigured = () =>
   !!(process.env.DB_SERVER && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME);
 
-// ─── PostgreSQL / Supabase Store ──────────────────────────────────────────────
+// ─── Vercel KV Store (Redis) ──────────────────────────────────────────────────
 
-let _pgPool = null;
-
-function getPgPool() {
-  if (!_pgPool) {
-    const { Pool } = require('pg');
-    _pgPool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-    });
-  }
-  return _pgPool;
+async function _kvLoad() {
+  const { kv } = require('@vercel/kv');
+  const data = await kv.get('appdata');
+  return data || { nextId: 1, questions: [] };
 }
 
-const pgStore = {
+async function _kvSave(data) {
+  const { kv } = require('@vercel/kv');
+  await kv.set('appdata', data);
+}
+
+const kvStore = {
   async createQuestion(text) {
-    const result = await getPgPool().query(
-      'INSERT INTO questions (text) VALUES ($1) RETURNING *',
-      [text]
-    );
-    return result.rows[0];
+    const data = await _kvLoad();
+    const q = {
+      id: data.nextId++,
+      text,
+      is_read: false,
+      is_highlighted: false,
+      is_public: false,
+      created_at: new Date().toISOString(),
+    };
+    data.questions.unshift(q);
+    await _kvSave(data);
+    return q;
   },
 
   async getAll() {
-    const result = await getPgPool().query(
-      'SELECT * FROM questions ORDER BY created_at DESC'
-    );
-    return result.rows;
+    return (await _kvLoad()).questions;
   },
 
   async getPublic() {
-    const result = await getPgPool().query(
-      'SELECT * FROM questions WHERE is_public = true ORDER BY is_highlighted DESC, created_at DESC'
-    );
-    return result.rows;
+    return (await _kvLoad()).questions
+      .filter((q) => q.is_public)
+      .sort((a, b) => b.is_highlighted - a.is_highlighted);
   },
 
   async update(id, patch) {
-    const fields = [];
-    const values = [];
-    let i = 1;
-    if (patch.is_read !== undefined)        { fields.push(`is_read = $${i++}`);        values.push(patch.is_read); }
-    if (patch.is_highlighted !== undefined) { fields.push(`is_highlighted = $${i++}`); values.push(patch.is_highlighted); }
-    if (patch.is_public !== undefined)      { fields.push(`is_public = $${i++}`);      values.push(patch.is_public); }
-    if (fields.length === 0) return false;
-    values.push(id);
-    const result = await getPgPool().query(
-      `UPDATE questions SET ${fields.join(', ')} WHERE id = $${i} RETURNING id`,
-      values
-    );
-    return result.rowCount > 0;
+    const data = await _kvLoad();
+    const idx = data.questions.findIndex((q) => q.id === Number(id));
+    if (idx === -1) return false;
+    data.questions[idx] = { ...data.questions[idx], ...patch };
+    await _kvSave(data);
+    return true;
   },
 
   async remove(id) {
-    const result = await getPgPool().query('DELETE FROM questions WHERE id = $1', [id]);
-    return result.rowCount > 0;
+    const data = await _kvLoad();
+    const before = data.questions.length;
+    data.questions = data.questions.filter((q) => q.id !== Number(id));
+    if (data.questions.length === before) return false;
+    await _kvSave(data);
+    return true;
   },
 
   async findUser(username) {
@@ -239,9 +237,9 @@ const db = {
 // ─── Export del modulo attivo ─────────────────────────────────────────────────
 
 function getStorage() {
-  if (isPostgresConfigured()) return pgStore;
+  if (isVercelKvConfigured()) return kvStore;
   if (isDbConfigured()) return db;
   return mem; // JSON locale
 }
 
-module.exports = { getStorage, isDbConfigured, isPostgresConfigured };
+module.exports = { getStorage, isDbConfigured, isVercelKvConfigured };
